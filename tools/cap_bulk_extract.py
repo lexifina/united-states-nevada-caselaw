@@ -19,7 +19,7 @@ _f.loader.exec_module(F)
 
 
 def one(job):
-    zp, out, reporter, volume, courts, after = job
+    zp, out, reporter, volume, courts, after, rename = job
     dest = Path(out) / reporter / f'{volume}.jsonl.gz'
     if dest.exists():
         return 0
@@ -37,6 +37,10 @@ def one(job):
             if after and (d.get('decision_date') or '') <= after:
                 continue
             r = F.record(d, reporter, volume)
+            old, new, since = rename or (None, None, None)
+            if old and r['court'] == old and (r['decided'] or '') >= since:
+                # a CAP mislabel: the court a decision is filed under had been abolished on that day
+                r['cap_court'], r['court'] = r['court'], new
             r['first_page'] = d.get('first_page')
             r['ocr_confidence'] = (d.get('analysis') or {}).get('ocr_confidence')
             if not r['opinions'] and not r['head_matter']:
@@ -51,12 +55,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('bulk'), ap.add_argument('out')
     ap.add_argument('--reporters', required=True), ap.add_argument('--courts', required=True), ap.add_argument('--after', default='')
+    ap.add_argument('--rename', default='', help='OLD|NEW|SINCE: CAP files decisions of NEW under OLD from SINCE on')
     a = ap.parse_args()
     jobs = []
     for rep in a.reporters.split(','):
         for zp in sorted((Path(a.bulk) / 'zips' / rep).glob('*.zip')):
             if zp.with_suffix('.ok').exists():
-                jobs.append((str(zp), a.out, rep, zp.stem, a.courts, a.after))
+                jobs.append((str(zp), a.out, rep, zp.stem, a.courts, a.after, tuple(a.rename.split('|')) if a.rename else None))
     with ProcessPoolExecutor(os.cpu_count()) as ex:
         total = sum(ex.map(one, jobs, chunksize=4))
     print(json.dumps({'volumes': len(jobs), 'cases': total}))
